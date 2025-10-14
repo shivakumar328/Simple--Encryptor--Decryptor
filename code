@@ -1,0 +1,91 @@
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.Scanner;
+import java.security.NoSuchAlgorithmException;
+
+public class AdvancedEncryptorDecryptor {
+
+    private static final String ALGORITHM = "AES";
+    private static SecretKey secretKey;
+
+    public static SecretKey getOrCreateSecretKey() throws NoSuchAlgorithmException {
+        if (secretKey == null) {
+            KeyGenerator keyGen = KeyGenerator.getInstance(ALGORITHM);
+            keyGen.init(128);
+            secretKey = keyGen.generateKey();
+            System.out.println("New Secret Key Generated and Stored for this session.");
+        }
+        return secretKey;
+    }
+        public static String encrypt(String plainText, SecretKey key) throws Exception {
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(Cipher.ENCRYPT_MODE, key);
+        byte[] encryptedBytes = cipher.doFinal(plainText.getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(encryptedBytes);
+    }
+    public static String decrypt(String encryptedText, SecretKey key) throws Exception {
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(Cipher.DECRYPT_MODE, key);
+        byte[] decryptedBytes = Base64.getDecoder().decode(encryptedText);
+        byte[] originalBytes = cipher.doFinal(decryptedBytes);
+        return new String(originalBytes, StandardCharsets.UTF_8);
+    }
+
+    public static void main(String[] args) {
+        Scanner scanner = new Scanner(System.in);
+        boolean running = true;
+
+        try {
+            SecretKey key = getOrCreateSecretKey();
+            
+            while (running) {
+                System.out.println("\n---------------------------------------");
+                System.out.println("Select an option:");
+                System.out.println("1. Encrypt a message");
+                System.out.println("2. Decrypt a message");
+                System.out.println("3. Exit");
+                System.out.print("Enter your choice: ");
+                
+                String choice = scanner.nextLine();
+                
+                switch (choice) {
+                    case "1":
+                        System.out.print("Enter the message to encrypt: ");
+                        String plainText = scanner.nextLine();
+                        String encryptedText = encrypt(plainText, key);
+                        System.out.println("---------------------------------------");
+                        System.out.println("Encrypted Message: " + encryptedText);
+                        break;
+                        
+                    case "2":
+                        System.out.print("Enter the message to decrypt (Base64 encoded): ");
+                        String textToDecrypt = scanner.nextLine();
+                        try {
+                            String decryptedText = decrypt(textToDecrypt, key);
+                            System.out.println("---------------------------------------");
+                            System.out.println("Decrypted Message: " + decryptedText);
+                        } catch (Exception e) {
+                            System.out.println(" Decryption failed! Please ensure the key and encrypted message are correct.");
+                        }
+                        break;
+                        
+                    case "3":
+                        running = false;
+                        System.out.println("Exiting program. Goodbye! ");
+                        break;
+                        
+                    default:
+                        System.out.println("Invalid choice. Please enter 1, 2, or 3.");
+                        break;
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            scanner.close();
+        }
+    }
+}
