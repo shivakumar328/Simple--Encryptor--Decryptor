@@ -1,91 +1,121 @@
 import javax.crypto.Cipher;
-import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.KeySpec;
 import java.util.Base64;
 import java.util.Scanner;
-import java.security.NoSuchAlgorithmException;
 
-public class AdvancedEncryptorDecryptor {
-
-    private static final String ALGORITHM = "AES";
-    private static SecretKey secretKey;
-
-    public static SecretKey getOrCreateSecretKey() throws NoSuchAlgorithmException {
-        if (secretKey == null) {
-            KeyGenerator keyGen = KeyGenerator.getInstance(ALGORITHM);
-            keyGen.init(128);
-            secretKey = keyGen.generateKey();
-            System.out.println("New Secret Key Generated and Stored for this session.");
-        }
-        return secretKey;
-    }
-        public static String encrypt(String plainText, SecretKey key) throws Exception {
-        Cipher cipher = Cipher.getInstance(ALGORITHM);
-        cipher.init(Cipher.ENCRYPT_MODE, key);
+public class SecureEncryptorDecryptor {
+    private static final String ENCRYPT_ALGO = "AES/GCM/NoPadding";
+    private static final int TAG_LENGTH_BIT = 128; 
+    private static final int IV_LENGTH_BYTE = 12;  
+    private static final int SALT_LENGTH_BYTE = 16; 
+    private static final String KEY_DERIVATION_ALGO = "PBKDF2WithHmacSHA256";
+    private static final int ITERATION_COUNT = 65536; 
+    private static final int KEY_LENGTH_BIT = 256;    
+    public static String encrypt(String plainText, String password) throws Exception {
+        byte[] salt = new byte[SALT_LENGTH_BYTE];
+        new SecureRandom().nextBytes(salt);
+        byte[] iv = new byte[IV_LENGTH_BYTE];
+        new SecureRandom().nextBytes(iv);
+        SecretKey aesKey = deriveKeyFromPassword(password.toCharArray(), salt);
+        Cipher cipher = Cipher.getInstance(ENCRYPT_ALGO);
+        GCMParameterSpec gcmParamSpec = new GCMParameterSpec(TAG_LENGTH_BIT, iv);
+        cipher.init(Cipher.ENCRYPT_MODE, aesKey, gcmParamSpec);
         byte[] encryptedBytes = cipher.doFinal(plainText.getBytes(StandardCharsets.UTF_8));
-        return Base64.getEncoder().encodeToString(encryptedBytes);
+        byte[] combinedBytes = ByteBuffer.allocate(salt.length + iv.length + encryptedBytes.length)
+                .put(salt)
+                .put(iv)
+                .put(encryptedBytes)
+                .array();
+        return Base64.getEncoder().encodeToString(combinedBytes);
     }
-    public static String decrypt(String encryptedText, SecretKey key) throws Exception {
-        Cipher cipher = Cipher.getInstance(ALGORITHM);
-        cipher.init(Cipher.DECRYPT_MODE, key);
-        byte[] decryptedBytes = Base64.getDecoder().decode(encryptedText);
-        byte[] originalBytes = cipher.doFinal(decryptedBytes);
-        return new String(originalBytes, StandardCharsets.UTF_8);
+    public static String decrypt(String encryptedText, String password) throws Exception {
+        byte[] decodedBytes = Base64.getDecoder().decode(encryptedText);
+        ByteBuffer byteBuffer = ByteBuffer.wrap(decodedBytes);
+        byte[] salt = new byte[SALT_LENGTH_BYTE];
+        byteBuffer.get(salt);
+        byte[] iv = new byte[IV_LENGTH_BYTE];
+        byteBuffer.get(iv);
+        byte[] encryptedBytes = new byte[byteBuffer.remaining()];
+        byteBuffer.get(encryptedBytes);
+        SecretKey aesKey = deriveKeyFromPassword(password.toCharArray(), salt);
+        Cipher cipher = Cipher.getInstance(ENCRYPT_ALGO);
+        GCMParameterSpec gcmParamSpec = new GCMParameterSpec(TAG_LENGTH_BIT, iv);
+        cipher.init(Cipher.DECRYPT_MODE, aesKey, gcmParamSpec);
+        byte[] decryptedBytes = cipher.doFinal(encryptedBytes);
+        return new String(decryptedBytes, StandardCharsets.UTF_8);
     }
+    private static SecretKey deriveKeyFromPassword(char[] password, byte[] salt)
+            throws NoSuchAlgorithmException, InvalidKeySpecException {
+        SecretKeyFactory factory = SecretKeyFactory.getInstance(KEY_DERIVATION_ALGO);
+        KeySpec spec = new PBEKeySpec(password, salt, ITERATION_COUNT, KEY_LENGTH_BIT);
+        SecretKey secret = new javax.crypto.spec.SecretKeySpec(factory.generateSecret(spec).getEncoded(), "AES");
+        return secret;
+    }
+
 
     public static void main(String[] args) {
         Scanner scanner = new Scanner(System.in);
         boolean running = true;
 
-        try {
-            SecretKey key = getOrCreateSecretKey();
-            
-            while (running) {
-                System.out.println("\n---------------------------------------");
-                System.out.println("Select an option:");
-                System.out.println("1. Encrypt a message");
-                System.out.println("2. Decrypt a message");
-                System.out.println("3. Exit");
-                System.out.print("Enter your choice: ");
-                
-                String choice = scanner.nextLine();
-                
-                switch (choice) {
-                    case "1":
+        while (running) {
+            System.out.println("\n--- Secure Encryptor/Decryptor (AES-256-GCM) ---");
+            System.out.println("1. Encrypt a message");
+            System.out.println("2. Decrypt a message");
+            System.out.println("3. Exit");
+            System.out.print("Enter your choice: ");
+
+            String choice = scanner.nextLine();
+
+            switch (choice) {
+                case "1":
+                    try {
                         System.out.print("Enter the message to encrypt: ");
                         String plainText = scanner.nextLine();
-                        String encryptedText = encrypt(plainText, key);
+                        System.out.print("Enter a password: ");
+                        String password = scanner.nextLine();
+                        String encryptedText = encrypt(plainText, password);
                         System.out.println("---------------------------------------");
                         System.out.println("Encrypted Message: " + encryptedText);
-                        break;
-                        
-                    case "2":
+                        System.out.println("---------------------------------------");
+                    } catch (Exception e) {
+                        System.err.println("Encryption failed: " + e.getMessage());
+                    }
+                    break;
+
+                case "2":
+                    try {
                         System.out.print("Enter the message to decrypt (Base64 encoded): ");
                         String textToDecrypt = scanner.nextLine();
-                        try {
-                            String decryptedText = decrypt(textToDecrypt, key);
-                            System.out.println("---------------------------------------");
-                            System.out.println("Decrypted Message: " + decryptedText);
-                        } catch (Exception e) {
-                            System.out.println(" Decryption failed! Please ensure the key and encrypted message are correct.");
-                        }
-                        break;
-                        
-                    case "3":
-                        running = false;
-                        System.out.println("Exiting program. Goodbye! ");
-                        break;
-                        
-                    default:
-                        System.out.println("Invalid choice. Please enter 1, 2, or 3.");
-                        break;
-                }
+                        System.out.print("Enter the password: ");
+                        String password = scanner.nextLine();
+                        String decryptedText = decrypt(textToDecrypt, password);
+                        System.out.println("---------------------------------------");
+                        System.out.println("Decrypted Message: " + decryptedText);
+                        System.out.println("---------------------------------------");
+                    } catch (Exception e) {
+                        System.err.println("Decryption failed! Please ensure the password and encrypted message are correct.");
+                    }
+                    break;
+
+                case "3":
+                    running = false;
+                    System.out.println("Exiting program. Goodbye!");
+                    break;
+
+                default:
+                    System.out.println("Invalid choice. Please enter 1, 2, or 3.");
+                    break;
             }
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            scanner.close();
         }
+        scanner.close();
     }
 }
