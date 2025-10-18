@@ -1,121 +1,266 @@
-import javax.crypto.Cipher;
-import javax.crypto.SecretKey;
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.*;
+import javax.crypto.spec.*;
+import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.security.spec.InvalidKeySpecException;
-import java.security.spec.KeySpec;
-import java.util.Base64;
-import java.util.Scanner;
+import java.nio.file.*;
+import java.security.*;
+import java.security.spec.*;
+import java.util.*;
 
-public class SecureEncryptorDecryptor {
+// Main encryption/decryption engine
+class CryptoEngine {
     private static final String ENCRYPT_ALGO = "AES/GCM/NoPadding";
-    private static final int TAG_LENGTH_BIT = 128; 
-    private static final int IV_LENGTH_BYTE = 12;  
-    private static final int SALT_LENGTH_BYTE = 16; 
+    private static final int TAG_LENGTH_BIT = 128;
+    private static final int IV_LENGTH_BYTE = 12;
+    private static final int SALT_LENGTH_BYTE = 16;
     private static final String KEY_DERIVATION_ALGO = "PBKDF2WithHmacSHA256";
-    private static final int ITERATION_COUNT = 65536; 
-    private static final int KEY_LENGTH_BIT = 256;    
-    public static String encrypt(String plainText, String password) throws Exception {
-        byte[] salt = new byte[SALT_LENGTH_BYTE];
-        new SecureRandom().nextBytes(salt);
-        byte[] iv = new byte[IV_LENGTH_BYTE];
-        new SecureRandom().nextBytes(iv);
-        SecretKey aesKey = deriveKeyFromPassword(password.toCharArray(), salt);
-        Cipher cipher = Cipher.getInstance(ENCRYPT_ALGO);
-        GCMParameterSpec gcmParamSpec = new GCMParameterSpec(TAG_LENGTH_BIT, iv);
-        cipher.init(Cipher.ENCRYPT_MODE, aesKey, gcmParamSpec);
-        byte[] encryptedBytes = cipher.doFinal(plainText.getBytes(StandardCharsets.UTF_8));
-        byte[] combinedBytes = ByteBuffer.allocate(salt.length + iv.length + encryptedBytes.length)
-                .put(salt)
-                .put(iv)
-                .put(encryptedBytes)
-                .array();
-        return Base64.getEncoder().encodeToString(combinedBytes);
+    private static final int ITERATION_COUNT = 65536;
+    private static final int KEY_LENGTH_BIT = 256;
+
+    public String encryptText(String plainText, char[] password) throws CryptoException {
+        try {
+            byte[] salt = generateRandomBytes(SALT_LENGTH_BYTE);
+            byte[] iv = generateRandomBytes(IV_LENGTH_BYTE);
+            SecretKey aesKey = deriveKeyFromPassword(password, salt);
+            
+            byte[] encryptedBytes = performEncryption(plainText.getBytes(StandardCharsets.UTF_8), aesKey, iv);
+            byte[] combinedBytes = combineBytes(salt, iv, encryptedBytes);
+            
+            return Base64.getEncoder().encodeToString(combinedBytes);
+        } catch (Exception e) {
+            throw new CryptoException("Encryption failed", e);
+        } finally {
+            Arrays.fill(password, '\0'); // Clear password from memory
+        }
     }
-    public static String decrypt(String encryptedText, String password) throws Exception {
-        byte[] decodedBytes = Base64.getDecoder().decode(encryptedText);
-        ByteBuffer byteBuffer = ByteBuffer.wrap(decodedBytes);
-        byte[] salt = new byte[SALT_LENGTH_BYTE];
-        byteBuffer.get(salt);
-        byte[] iv = new byte[IV_LENGTH_BYTE];
-        byteBuffer.get(iv);
-        byte[] encryptedBytes = new byte[byteBuffer.remaining()];
-        byteBuffer.get(encryptedBytes);
-        SecretKey aesKey = deriveKeyFromPassword(password.toCharArray(), salt);
-        Cipher cipher = Cipher.getInstance(ENCRYPT_ALGO);
-        GCMParameterSpec gcmParamSpec = new GCMParameterSpec(TAG_LENGTH_BIT, iv);
-        cipher.init(Cipher.DECRYPT_MODE, aesKey, gcmParamSpec);
-        byte[] decryptedBytes = cipher.doFinal(encryptedBytes);
-        return new String(decryptedBytes, StandardCharsets.UTF_8);
+
+    public String decryptText(String encryptedText, char[] password) throws CryptoException {
+        try {
+            byte[] decodedBytes = Base64.getDecoder().decode(encryptedText);
+            ByteBuffer buffer = ByteBuffer.wrap(decodedBytes);
+            
+            byte[] salt = extractBytes(buffer, SALT_LENGTH_BYTE);
+            byte[] iv = extractBytes(buffer, IV_LENGTH_BYTE);
+            byte[] encryptedBytes = extractBytes(buffer, buffer.remaining());
+            
+            SecretKey aesKey = deriveKeyFromPassword(password, salt);
+            byte[] decryptedBytes = performDecryption(encryptedBytes, aesKey, iv);
+            
+            return new String(decryptedBytes, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new CryptoException("Decryption failed - check password and data", e);
+        } finally {
+            Arrays.fill(password, '\0');
+        }
     }
-    private static SecretKey deriveKeyFromPassword(char[] password, byte[] salt)
+
+    public void encryptFile(Path inputFile, Path outputFile, char[] password) throws CryptoException {
+        try {
+            byte[] fileData = Files.readAllBytes(inputFile);
+            String encrypted = encryptText(Base64.getEncoder().encodeToString(fileData), password);
+            Files.write(outputFile, encrypted.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            throw new CryptoException("File encryption failed", e);
+        }
+    }
+
+    public void decryptFile(Path inputFile, Path outputFile, char[] password) throws CryptoException {
+        try {
+            String encrypted = new String(Files.readAllBytes(inputFile), StandardCharsets.UTF_8);
+            String decrypted = decryptText(encrypted, password);
+            byte[] fileData = Base64.getDecoder().decode(decrypted);
+            Files.write(outputFile, fileData);
+        } catch (IOException e) {
+            throw new CryptoException("File decryption failed", e);
+        }
+    }
+
+    private byte[] generateRandomBytes(int length) {
+        byte[] bytes = new byte[length];
+        new SecureRandom().nextBytes(bytes);
+        return bytes;
+    }
+
+    private SecretKey deriveKeyFromPassword(char[] password, byte[] salt) 
             throws NoSuchAlgorithmException, InvalidKeySpecException {
         SecretKeyFactory factory = SecretKeyFactory.getInstance(KEY_DERIVATION_ALGO);
         KeySpec spec = new PBEKeySpec(password, salt, ITERATION_COUNT, KEY_LENGTH_BIT);
-        SecretKey secret = new javax.crypto.spec.SecretKeySpec(factory.generateSecret(spec).getEncoded(), "AES");
-        return secret;
+        return new SecretKeySpec(factory.generateSecret(spec).getEncoded(), "AES");
     }
 
+    private byte[] performEncryption(byte[] data, SecretKey key, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance(ENCRYPT_ALGO);
+        GCMParameterSpec gcmSpec = new GCMParameterSpec(TAG_LENGTH_BIT, iv);
+        cipher.init(Cipher.ENCRYPT_MODE, key, gcmSpec);
+        return cipher.doFinal(data);
+    }
+
+    private byte[] performDecryption(byte[] data, SecretKey key, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance(ENCRYPT_ALGO);
+        GCMParameterSpec gcmSpec = new GCMParameterSpec(TAG_LENGTH_BIT, iv);
+        cipher.init(Cipher.DECRYPT_MODE, key, gcmSpec);
+        return cipher.doFinal(data);
+    }
+
+    private byte[] combineBytes(byte[] salt, byte[] iv, byte[] encrypted) {
+        return ByteBuffer.allocate(salt.length + iv.length + encrypted.length)
+                .put(salt).put(iv).put(encrypted).array();
+    }
+
+    private byte[] extractBytes(ByteBuffer buffer, int length) {
+        byte[] bytes = new byte[length];
+        buffer.get(bytes);
+        return bytes;
+    }
+}
+
+// Custom exception for crypto operations
+class CryptoException extends Exception {
+    public CryptoException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+// Password strength validator
+class PasswordValidator {
+    public enum Strength { WEAK, MODERATE, STRONG }
+
+    public static Strength checkStrength(String password) {
+        int score = 0;
+        if (password.length() >= 8) score++;
+        if (password.length() >= 12) score++;
+        if (password.matches(".*[a-z].*")) score++;
+        if (password.matches(".*[A-Z].*")) score++;
+        if (password.matches(".*\\d.*")) score++;
+        if (password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>\\/?].*")) score++;
+
+        if (score <= 2) return Strength.WEAK;
+        if (score <= 4) return Strength.MODERATE;
+        return Strength.STRONG;
+    }
+
+    public static void displayStrength(String password) {
+        Strength strength = checkStrength(password);
+        String color = strength == Strength.WEAK ? "⚠️" : 
+                      strength == Strength.MODERATE ? "⚡" : "✅";
+        System.out.println(color + " Password Strength: " + strength);
+    }
+}
+
+// Main application
+public class EnhancedSecureEncryptor {
+    private static final CryptoEngine crypto = new CryptoEngine();
+    private static final Scanner scanner = new Scanner(System.in);
 
     public static void main(String[] args) {
-        Scanner scanner = new Scanner(System.in);
         boolean running = true;
 
         while (running) {
-            System.out.println("\n--- Secure Encryptor/Decryptor (AES-256-GCM) ---");
-            System.out.println("1. Encrypt a message");
-            System.out.println("2. Decrypt a message");
-            System.out.println("3. Exit");
-            System.out.print("Enter your choice: ");
+            displayMenu();
+            String choice = scanner.nextLine().trim();
 
-            String choice = scanner.nextLine();
-
-            switch (choice) {
-                case "1":
-                    try {
-                        System.out.print("Enter the message to encrypt: ");
-                        String plainText = scanner.nextLine();
-                        System.out.print("Enter a password: ");
-                        String password = scanner.nextLine();
-                        String encryptedText = encrypt(plainText, password);
-                        System.out.println("---------------------------------------");
-                        System.out.println("Encrypted Message: " + encryptedText);
-                        System.out.println("---------------------------------------");
-                    } catch (Exception e) {
-                        System.err.println("Encryption failed: " + e.getMessage());
-                    }
-                    break;
-
-                case "2":
-                    try {
-                        System.out.print("Enter the message to decrypt (Base64 encoded): ");
-                        String textToDecrypt = scanner.nextLine();
-                        System.out.print("Enter the password: ");
-                        String password = scanner.nextLine();
-                        String decryptedText = decrypt(textToDecrypt, password);
-                        System.out.println("---------------------------------------");
-                        System.out.println("Decrypted Message: " + decryptedText);
-                        System.out.println("---------------------------------------");
-                    } catch (Exception e) {
-                        System.err.println("Decryption failed! Please ensure the password and encrypted message are correct.");
-                    }
-                    break;
-
-                case "3":
-                    running = false;
-                    System.out.println("Exiting program. Goodbye!");
-                    break;
-
-                default:
-                    System.out.println("Invalid choice. Please enter 1, 2, or 3.");
-                    break;
+            try {
+                switch (choice) {
+                    case "1": encryptTextMode(); break;
+                    case "2": decryptTextMode(); break;
+                    case "3": encryptFileMode(); break;
+                    case "4": decryptFileMode(); break;
+                    case "5": passwordStrengthCheck(); break;
+                    case "6": 
+                        running = false;
+                        System.out.println("🔒 Exiting securely. Goodbye!");
+                        break;
+                    default:
+                        System.out.println("❌ Invalid choice. Please select 1-6.");
+                }
+            } catch (Exception e) {
+                System.err.println("❌ Error: " + e.getMessage());
             }
         }
         scanner.close();
+    }
+
+    private static void displayMenu() {
+        System.out.println("\n╔════════════════════════════════════════════╗");
+        System.out.println("║  Secure Encryptor/Decryptor (AES-256-GCM) ║");
+        System.out.println("╚════════════════════════════════════════════╝");
+        System.out.println("1. 📝 Encrypt Text");
+        System.out.println("2. 🔓 Decrypt Text");
+        System.out.println("3. 📁 Encrypt File");
+        System.out.println("4. 📂 Decrypt File");
+        System.out.println("5. 🔑 Check Password Strength");
+        System.out.println("6. 🚪 Exit");
+        System.out.print("\n➤ Enter your choice: ");
+    }
+
+    private static void encryptTextMode() throws CryptoException {
+        System.out.print("Enter message to encrypt: ");
+        String plainText = scanner.nextLine();
+        
+        System.out.print("Enter password: ");
+        String password = scanner.nextLine();
+        PasswordValidator.displayStrength(password);
+        
+        String encrypted = crypto.encryptText(plainText, password.toCharArray());
+        System.out.println("\n✅ Encrypted Message:");
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        System.out.println(encrypted);
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    }
+
+    private static void decryptTextMode() throws CryptoException {
+        System.out.print("Enter encrypted message (Base64): ");
+        String encryptedText = scanner.nextLine();
+        
+        System.out.print("Enter password: ");
+        String password = scanner.nextLine();
+        
+        String decrypted = crypto.decryptText(encryptedText, password.toCharArray());
+        System.out.println("\n✅ Decrypted Message:");
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        System.out.println(decrypted);
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    }
+
+    private static void encryptFileMode() throws CryptoException {
+        System.out.print("Enter input file path: ");
+        String inputPath = scanner.nextLine();
+        
+        System.out.print("Enter output file path: ");
+        String outputPath = scanner.nextLine();
+        
+        System.out.print("Enter password: ");
+        String password = scanner.nextLine();
+        PasswordValidator.displayStrength(password);
+        
+        crypto.encryptFile(Paths.get(inputPath), Paths.get(outputPath), password.toCharArray());
+        System.out.println("✅ File encrypted successfully!");
+    }
+
+    private static void decryptFileMode() throws CryptoException {
+        System.out.print("Enter encrypted file path: ");
+        String inputPath = scanner.nextLine();
+        
+        System.out.print("Enter output file path: ");
+        String outputPath = scanner.nextLine();
+        
+        System.out.print("Enter password: ");
+        String password = scanner.nextLine();
+        
+        crypto.decryptFile(Paths.get(inputPath), Paths.get(outputPath), password.toCharArray());
+        System.out.println("✅ File decrypted successfully!");
+    }
+
+    private static void passwordStrengthCheck() {
+        System.out.print("Enter password to check: ");
+        String password = scanner.nextLine();
+        PasswordValidator.displayStrength(password);
+        
+        System.out.println("\n💡 Tips for strong passwords:");
+        System.out.println("   • At least 12 characters");
+        System.out.println("   • Mix uppercase and lowercase");
+        System.out.println("   • Include numbers and symbols");
+        System.out.println("   • Avoid common words or patterns");
     }
 }
