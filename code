@@ -7,6 +7,8 @@ import java.nio.file.*;
 import java.security.*;
 import java.security.spec.*;
 import java.util.*;
+import java.util.stream.*;
+import java.util.zip.*;
 
 // Main encryption/decryption engine
 class CryptoEngine {
@@ -17,6 +19,7 @@ class CryptoEngine {
     private static final String KEY_DERIVATION_ALGO = "PBKDF2WithHmacSHA256";
     private static final int ITERATION_COUNT = 65536;
     private static final int KEY_LENGTH_BIT = 256;
+    private static final int BUFFER_SIZE = 8192;
 
     public String encryptText(String plainText, char[] password) throws CryptoException {
         try {
@@ -31,7 +34,7 @@ class CryptoEngine {
         } catch (Exception e) {
             throw new CryptoException("Encryption failed", e);
         } finally {
-            Arrays.fill(password, '\0'); // Clear password from memory
+            Arrays.fill(password, '\0');
         }
     }
 
@@ -55,25 +58,109 @@ class CryptoEngine {
         }
     }
 
-    public void encryptFile(Path inputFile, Path outputFile, char[] password) throws CryptoException {
+    public void encryptFile(Path inputFile, Path outputFile, char[] password, boolean compress, ProgressCallback callback) throws CryptoException {
         try {
+            if (!Files.exists(inputFile)) {
+                throw new CryptoException("Input file does not exist: " + inputFile, null);
+            }
+            
+            long fileSize = Files.size(inputFile);
+            if (fileSize > 100_000_000) { // 100MB limit
+                throw new CryptoException("File too large (max 100MB)", null);
+            }
+            
             byte[] fileData = Files.readAllBytes(inputFile);
+            if (callback != null) callback.onProgress(30);
+            
+            if (compress) {
+                fileData = compressData(fileData);
+                if (callback != null) callback.onProgress(50);
+            }
+            
             String encrypted = encryptText(Base64.getEncoder().encodeToString(fileData), password);
+            if (callback != null) callback.onProgress(80);
+            
             Files.write(outputFile, encrypted.getBytes(StandardCharsets.UTF_8));
+            if (callback != null) callback.onProgress(100);
         } catch (IOException e) {
             throw new CryptoException("File encryption failed", e);
         }
     }
 
-    public void decryptFile(Path inputFile, Path outputFile, char[] password) throws CryptoException {
+    public void decryptFile(Path inputFile, Path outputFile, char[] password, boolean decompress, ProgressCallback callback) throws CryptoException {
         try {
+            if (!Files.exists(inputFile)) {
+                throw new CryptoException("Input file does not exist: " + inputFile, null);
+            }
+            
             String encrypted = new String(Files.readAllBytes(inputFile), StandardCharsets.UTF_8);
+            if (callback != null) callback.onProgress(30);
+            
             String decrypted = decryptText(encrypted, password);
+            if (callback != null) callback.onProgress(60);
+            
             byte[] fileData = Base64.getDecoder().decode(decrypted);
+            
+            if (decompress) {
+                fileData = decompressData(fileData);
+                if (callback != null) callback.onProgress(80);
+            }
+            
             Files.write(outputFile, fileData);
+            if (callback != null) callback.onProgress(100);
         } catch (IOException e) {
             throw new CryptoException("File decryption failed", e);
         }
+    }
+
+    public void encryptDirectory(Path inputDir, Path outputDir, char[] password, ProgressCallback callback) throws CryptoException {
+        try {
+            if (!Files.exists(inputDir) || !Files.isDirectory(inputDir)) {
+                throw new CryptoException("Invalid input directory", null);
+            }
+            
+            Files.createDirectories(outputDir);
+            List<Path> files = Files.walk(inputDir)
+                    .filter(Files::isRegularFile)
+                    .collect(Collectors.toList());
+            
+            int total = files.size();
+            for (int i = 0; i < total; i++) {
+                Path file = files.get(i);
+                Path relativePath = inputDir.relativize(file);
+                Path outputFile = outputDir.resolve(relativePath.toString() + ".enc");
+                
+                Files.createDirectories(outputFile.getParent());
+                encryptFile(file, outputFile, password.clone(), true, null);
+                
+                if (callback != null) {
+                    callback.onProgress((i + 1) * 100 / total);
+                }
+            }
+        } catch (IOException e) {
+            throw new CryptoException("Directory encryption failed", e);
+        }
+    }
+
+    private byte[] compressData(byte[] data) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (GZIPOutputStream gzos = new GZIPOutputStream(baos)) {
+            gzos.write(data);
+        }
+        return baos.toByteArray();
+    }
+
+    private byte[] decompressData(byte[] data) throws IOException {
+        ByteArrayInputStream bais = new ByteArrayInputStream(data);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (GZIPInputStream gzis = new GZIPInputStream(bais)) {
+            byte[] buffer = new byte[BUFFER_SIZE];
+            int len;
+            while ((len = gzis.read(buffer)) > 0) {
+                baos.write(buffer, 0, len);
+            }
+        }
+        return baos.toByteArray();
     }
 
     private byte[] generateRandomBytes(int length) {
@@ -115,36 +202,83 @@ class CryptoEngine {
     }
 }
 
-// Custom exception for crypto operations
+// Progress callback interface
+interface ProgressCallback {
+    void onProgress(int percentage);
+}
+
+// Custom exception
 class CryptoException extends Exception {
     public CryptoException(String message, Throwable cause) {
         super(message, cause);
     }
 }
 
-// Password strength validator
-class PasswordValidator {
-    public enum Strength { WEAK, MODERATE, STRONG }
+// Password utilities
+class PasswordUtils {
+    public enum Strength { WEAK, MODERATE, STRONG, VERY_STRONG }
 
     public static Strength checkStrength(String password) {
         int score = 0;
         if (password.length() >= 8) score++;
         if (password.length() >= 12) score++;
+        if (password.length() >= 16) score++;
         if (password.matches(".*[a-z].*")) score++;
         if (password.matches(".*[A-Z].*")) score++;
         if (password.matches(".*\\d.*")) score++;
         if (password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>\\/?].*")) score++;
+        if (!password.matches(".*(.)\\1{2,}.*")) score++; // No repeated chars
 
         if (score <= 2) return Strength.WEAK;
         if (score <= 4) return Strength.MODERATE;
-        return Strength.STRONG;
+        if (score <= 6) return Strength.STRONG;
+        return Strength.VERY_STRONG;
     }
 
     public static void displayStrength(String password) {
         Strength strength = checkStrength(password);
-        String color = strength == Strength.WEAK ? "⚠️" : 
-                      strength == Strength.MODERATE ? "⚡" : "✅";
+        String color = switch (strength) {
+            case WEAK -> "🔴";
+            case MODERATE -> "🟡";
+            case STRONG -> "🟢";
+            case VERY_STRONG -> "💚";
+        };
         System.out.println(color + " Password Strength: " + strength);
+    }
+
+    public static String generatePassword(int length, boolean includeSymbols) {
+        String lower = "abcdefghijklmnopqrstuvwxyz";
+        String upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        String digits = "0123456789";
+        String symbols = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+        
+        String chars = lower + upper + digits;
+        if (includeSymbols) chars += symbols;
+        
+        SecureRandom random = new SecureRandom();
+        StringBuilder password = new StringBuilder(length);
+        
+        // Ensure at least one of each type
+        password.append(lower.charAt(random.nextInt(lower.length())));
+        password.append(upper.charAt(random.nextInt(upper.length())));
+        password.append(digits.charAt(random.nextInt(digits.length())));
+        if (includeSymbols) password.append(symbols.charAt(random.nextInt(symbols.length())));
+        
+        // Fill the rest randomly
+        for (int i = password.length(); i < length; i++) {
+            password.append(chars.charAt(random.nextInt(chars.length())));
+        }
+        
+        // Shuffle
+        char[] arr = password.toString().toCharArray();
+        for (int i = arr.length - 1; i > 0; i--) {
+            int j = random.nextInt(i + 1);
+            char temp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = temp;
+        }
+        
+        return new String(arr);
     }
 }
 
@@ -152,9 +286,13 @@ class PasswordValidator {
 public class EnhancedSecureEncryptor {
     private static final CryptoEngine crypto = new CryptoEngine();
     private static final Scanner scanner = new Scanner(System.in);
+    private static final Console console = System.console();
 
     public static void main(String[] args) {
         boolean running = true;
+
+        System.out.println("🔐 Enhanced Secure Encryptor v2.0");
+        System.out.println("═══════════════════════════════════════════");
 
         while (running) {
             displayMenu();
@@ -162,17 +300,19 @@ public class EnhancedSecureEncryptor {
 
             try {
                 switch (choice) {
-                    case "1": encryptTextMode(); break;
-                    case "2": decryptTextMode(); break;
-                    case "3": encryptFileMode(); break;
-                    case "4": decryptFileMode(); break;
-                    case "5": passwordStrengthCheck(); break;
-                    case "6": 
+                    case "1" -> encryptTextMode();
+                    case "2" -> decryptTextMode();
+                    case "3" -> encryptFileMode();
+                    case "4" -> decryptFileMode();
+                    case "5" -> batchEncryptMode();
+                    case "6" -> encryptDirectoryMode();
+                    case "7" -> generatePasswordMode();
+                    case "8" -> passwordStrengthCheck();
+                    case "9" -> {
                         running = false;
                         System.out.println("🔒 Exiting securely. Goodbye!");
-                        break;
-                    default:
-                        System.out.println("❌ Invalid choice. Please select 1-6.");
+                    }
+                    default -> System.out.println("❌ Invalid choice. Please select 1-9.");
                 }
             } catch (Exception e) {
                 System.err.println("❌ Error: " + e.getMessage());
@@ -183,26 +323,51 @@ public class EnhancedSecureEncryptor {
 
     private static void displayMenu() {
         System.out.println("\n╔════════════════════════════════════════════╗");
-        System.out.println("║  Secure Encryptor/Decryptor (AES-256-GCM) ║");
+        System.out.println("║     Secure Encryptor (AES-256-GCM)        ║");
         System.out.println("╚════════════════════════════════════════════╝");
         System.out.println("1. 📝 Encrypt Text");
         System.out.println("2. 🔓 Decrypt Text");
-        System.out.println("3. 📁 Encrypt File");
+        System.out.println("3. 📁 Encrypt File (with compression)");
         System.out.println("4. 📂 Decrypt File");
-        System.out.println("5. 🔑 Check Password Strength");
-        System.out.println("6. 🚪 Exit");
+        System.out.println("5. 📦 Batch Encrypt Files");
+        System.out.println("6. 📚 Encrypt Directory");
+        System.out.println("7. 🎲 Generate Strong Password");
+        System.out.println("8. 🔑 Check Password Strength");
+        System.out.println("9. 🚪 Exit");
         System.out.print("\n➤ Enter your choice: ");
+    }
+
+    private static char[] readPassword(String prompt) {
+        if (console != null) {
+            return console.readPassword(prompt);
+        } else {
+            System.out.print(prompt);
+            return scanner.nextLine().toCharArray();
+        }
+    }
+
+    private static char[] getPasswordWithConfirmation() {
+        char[] password = readPassword("Enter password: ");
+        char[] confirm = readPassword("Confirm password: ");
+        
+        if (!Arrays.equals(password, confirm)) {
+            Arrays.fill(password, '\0');
+            Arrays.fill(confirm, '\0');
+            throw new IllegalArgumentException("Passwords do not match!");
+        }
+        
+        Arrays.fill(confirm, '\0');
+        PasswordUtils.displayStrength(new String(password));
+        return password;
     }
 
     private static void encryptTextMode() throws CryptoException {
         System.out.print("Enter message to encrypt: ");
         String plainText = scanner.nextLine();
         
-        System.out.print("Enter password: ");
-        String password = scanner.nextLine();
-        PasswordValidator.displayStrength(password);
+        char[] password = getPasswordWithConfirmation();
         
-        String encrypted = crypto.encryptText(plainText, password.toCharArray());
+        String encrypted = crypto.encryptText(plainText, password);
         System.out.println("\n✅ Encrypted Message:");
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         System.out.println(encrypted);
@@ -213,10 +378,9 @@ public class EnhancedSecureEncryptor {
         System.out.print("Enter encrypted message (Base64): ");
         String encryptedText = scanner.nextLine();
         
-        System.out.print("Enter password: ");
-        String password = scanner.nextLine();
+        char[] password = readPassword("Enter password: ");
         
-        String decrypted = crypto.decryptText(encryptedText, password.toCharArray());
+        String decrypted = crypto.decryptText(encryptedText, password);
         System.out.println("\n✅ Decrypted Message:");
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         System.out.println(decrypted);
@@ -227,40 +391,112 @@ public class EnhancedSecureEncryptor {
         System.out.print("Enter input file path: ");
         String inputPath = scanner.nextLine();
         
-        System.out.print("Enter output file path: ");
+        System.out.print("Enter output file path (or press Enter for auto): ");
         String outputPath = scanner.nextLine();
+        if (outputPath.isEmpty()) {
+            outputPath = inputPath + ".enc";
+        }
         
-        System.out.print("Enter password: ");
-        String password = scanner.nextLine();
-        PasswordValidator.displayStrength(password);
+        System.out.print("Enable compression? (y/n): ");
+        boolean compress = scanner.nextLine().toLowerCase().startsWith("y");
         
-        crypto.encryptFile(Paths.get(inputPath), Paths.get(outputPath), password.toCharArray());
-        System.out.println("✅ File encrypted successfully!");
+        char[] password = getPasswordWithConfirmation();
+        
+        System.out.println("\n⏳ Encrypting file...");
+        crypto.encryptFile(Paths.get(inputPath), Paths.get(outputPath), password, compress, 
+            percentage -> System.out.print("\r[" + "█".repeat(percentage/5) + " ".repeat(20-percentage/5) + "] " + percentage + "%"));
+        
+        System.out.println("\n✅ File encrypted successfully: " + outputPath);
     }
 
     private static void decryptFileMode() throws CryptoException {
         System.out.print("Enter encrypted file path: ");
         String inputPath = scanner.nextLine();
         
-        System.out.print("Enter output file path: ");
+        System.out.print("Enter output file path (or press Enter for auto): ");
         String outputPath = scanner.nextLine();
+        if (outputPath.isEmpty()) {
+            outputPath = inputPath.replace(".enc", ".dec");
+        }
         
-        System.out.print("Enter password: ");
-        String password = scanner.nextLine();
+        System.out.print("Was compression enabled during encryption? (y/n): ");
+        boolean decompress = scanner.nextLine().toLowerCase().startsWith("y");
         
-        crypto.decryptFile(Paths.get(inputPath), Paths.get(outputPath), password.toCharArray());
-        System.out.println("✅ File decrypted successfully!");
+        char[] password = readPassword("Enter password: ");
+        
+        System.out.println("\n⏳ Decrypting file...");
+        crypto.decryptFile(Paths.get(inputPath), Paths.get(outputPath), password, decompress,
+            percentage -> System.out.print("\r[" + "█".repeat(percentage/5) + " ".repeat(20-percentage/5) + "] " + percentage + "%"));
+        
+        System.out.println("\n✅ File decrypted successfully: " + outputPath);
+    }
+
+    private static void batchEncryptMode() throws CryptoException {
+        System.out.print("Enter file paths (comma-separated): ");
+        String[] files = scanner.nextLine().split(",");
+        
+        System.out.print("Enter output directory: ");
+        String outputDir = scanner.nextLine();
+        
+        char[] password = getPasswordWithConfirmation();
+        
+        int success = 0;
+        for (String file : files) {
+            try {
+                Path input = Paths.get(file.trim());
+                Path output = Paths.get(outputDir, input.getFileName() + ".enc");
+                crypto.encryptFile(input, output, password.clone(), true, null);
+                System.out.println("✅ Encrypted: " + input.getFileName());
+                success++;
+            } catch (Exception e) {
+                System.err.println("❌ Failed: " + file + " - " + e.getMessage());
+            }
+        }
+        System.out.println("\n✅ Batch complete: " + success + "/" + files.length + " files encrypted");
+    }
+
+    private static void encryptDirectoryMode() throws CryptoException {
+        System.out.print("Enter input directory: ");
+        String inputDir = scanner.nextLine();
+        
+        System.out.print("Enter output directory: ");
+        String outputDir = scanner.nextLine();
+        
+        char[] password = getPasswordWithConfirmation();
+        
+        System.out.println("\n⏳ Encrypting directory...");
+        crypto.encryptDirectory(Paths.get(inputDir), Paths.get(outputDir), password,
+            percentage -> System.out.print("\r[" + "█".repeat(percentage/5) + " ".repeat(20-percentage/5) + "] " + percentage + "%"));
+        
+        System.out.println("\n✅ Directory encrypted successfully!");
+    }
+
+    private static void generatePasswordMode() {
+        System.out.print("Enter password length (12-32): ");
+        int length = Integer.parseInt(scanner.nextLine());
+        length = Math.max(12, Math.min(32, length));
+        
+        System.out.print("Include symbols? (y/n): ");
+        boolean includeSymbols = scanner.nextLine().toLowerCase().startsWith("y");
+        
+        String password = PasswordUtils.generatePassword(length, includeSymbols);
+        System.out.println("\n✅ Generated Password:");
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        System.out.println(password);
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        PasswordUtils.displayStrength(password);
     }
 
     private static void passwordStrengthCheck() {
         System.out.print("Enter password to check: ");
         String password = scanner.nextLine();
-        PasswordValidator.displayStrength(password);
+        PasswordUtils.displayStrength(password);
         
         System.out.println("\n💡 Tips for strong passwords:");
-        System.out.println("   • At least 12 characters");
+        System.out.println("   • At least 16 characters");
         System.out.println("   • Mix uppercase and lowercase");
         System.out.println("   • Include numbers and symbols");
         System.out.println("   • Avoid common words or patterns");
+        System.out.println("   • Use unique passwords for each account");
     }
 }
