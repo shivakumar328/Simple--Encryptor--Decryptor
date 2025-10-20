@@ -10,7 +10,6 @@ import java.util.*;
 import java.util.stream.*;
 import java.util.zip.*;
 
-// Main encryption/decryption engine
 class CryptoEngine {
     private static final String ENCRYPT_ALGO = "AES/GCM/NoPadding";
     private static final int TAG_LENGTH_BIT = 128;
@@ -202,19 +201,16 @@ class CryptoEngine {
     }
 }
 
-// Progress callback interface
 interface ProgressCallback {
     void onProgress(int percentage);
 }
 
-// Custom exception
 class CryptoException extends Exception {
     public CryptoException(String message, Throwable cause) {
         super(message, cause);
     }
 }
 
-// Password utilities
 class PasswordUtils {
     public enum Strength { WEAK, MODERATE, STRONG, VERY_STRONG }
 
@@ -258,18 +254,15 @@ class PasswordUtils {
         SecureRandom random = new SecureRandom();
         StringBuilder password = new StringBuilder(length);
         
-        // Ensure at least one of each type
         password.append(lower.charAt(random.nextInt(lower.length())));
         password.append(upper.charAt(random.nextInt(upper.length())));
         password.append(digits.charAt(random.nextInt(digits.length())));
         if (includeSymbols) password.append(symbols.charAt(random.nextInt(symbols.length())));
         
-        // Fill the rest randomly
         for (int i = password.length(); i < length; i++) {
             password.append(chars.charAt(random.nextInt(chars.length())));
         }
         
-        // Shuffle
         char[] arr = password.toString().toCharArray();
         for (int i = arr.length - 1; i > 0; i--) {
             int j = random.nextInt(i + 1);
@@ -282,7 +275,6 @@ class PasswordUtils {
     }
 }
 
-// Main application
 public class EnhancedSecureEncryptor {
     private static final CryptoEngine crypto = new CryptoEngine();
     private static final Scanner scanner = new Scanner(System.in);
