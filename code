@@ -2,8 +2,10 @@ import javax.crypto.*;
 import javax.crypto.spec.*;
 import java.io.*;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.attribute.*;
 import java.security.*;
 import java.security.spec.*;
 import java.util.*;
@@ -275,15 +277,383 @@ class PasswordUtils {
     }
 }
 
+class AuditLogger {
+    private static final Path LOG_FILE = Paths.get("crypto_audit.log");
+    
+    public static void log(String action, String details) {
+        try {
+            String timestamp = java.time.LocalDateTime.now().toString();
+            String entry = String.format("[%s] %s - %s%n", timestamp, action, details);
+            Files.write(LOG_FILE, entry.getBytes(StandardCharsets.UTF_8), 
+                       StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            System.err.println("⚠️  Failed to write audit log");
+        }
+    }
+    
+    public static void viewLog() throws IOException {
+        if (Files.exists(LOG_FILE)) {
+            System.out.println("\n📋 Recent Activity (Last 20 entries):");
+            System.out.println("════════════════════════════════════════════");
+            List<String> lines = Files.readAllLines(LOG_FILE);
+            lines.stream().skip(Math.max(0, lines.size() - 20)).forEach(System.out::println);
+        } else {
+            System.out.println("📋 No audit log found.");
+        }
+    }
+}
+
+class SecureShredder {
+    public static void shredFile(Path file, int passes) throws IOException {
+        if (!Files.exists(file)) {
+            throw new IOException("File does not exist");
+        }
+        
+        long size = Files.size(file);
+        SecureRandom random = new SecureRandom();
+        
+        for (int pass = 0; pass < passes; pass++) {
+            try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE)) {
+                ByteBuffer buffer = ByteBuffer.allocate(4096);
+                long written = 0;
+                
+                while (written < size) {
+                    buffer.clear();
+                    random.nextBytes(buffer.array());
+                    int toWrite = (int) Math.min(buffer.capacity(), size - written);
+                    buffer.limit(toWrite);
+                    written += channel.write(buffer);
+                }
+            }
+        }
+        
+        Files.delete(file);
+    }
+}
+
+class KeyFileManager {
+    public static void createKeyFile(Path keyFile, int keySize) throws IOException {
+        SecureRandom random = new SecureRandom();
+        byte[] keyData = new byte[keySize];
+        random.nextBytes(keyData);
+        Files.write(keyFile, Base64.getEncoder().encode(keyData));
+    }
+    
+    public static char[] combinePasswordAndKeyFile(char[] password, Path keyFile) throws IOException {
+        byte[] keyData = Base64.getDecoder().decode(Files.readAllBytes(keyFile));
+        String combined = new String(password) + Base64.getEncoder().encodeToString(keyData);
+        Arrays.fill(password, '\0');
+        return combined.toCharArray();
+    }
+}
+
+class MetadataManager {
+    public static void saveMetadata(Path file, Path metadataFile) throws IOException {
+        var attrs = Files.readAttributes(file, BasicFileAttributes.class);
+        Properties props = new Properties();
+        props.setProperty("originalName", file.getFileName().toString());
+        props.setProperty("size", String.valueOf(attrs.size()));
+        props.setProperty("creationTime", attrs.creationTime().toString());
+        props.setProperty("modifiedTime", attrs.lastModifiedTime().toString());
+        
+        try (OutputStream out = Files.newOutputStream(metadataFile)) {
+            props.store(out, "File Metadata");
+        }
+    }
+    
+    public static void restoreMetadata(Path file, Path metadataFile) throws IOException {
+        Properties props = new Properties();
+        try (InputStream in = Files.newInputStream(metadataFile)) {
+            props.load(in);
+        }
+        
+        String originalName = props.getProperty("originalName");
+        String modifiedTime = props.getProperty("modifiedTime");
+        
+        if (originalName != null && !file.getFileName().toString().equals(originalName)) {
+            Path newPath = file.getParent().resolve(originalName);
+            Files.move(file, newPath);
+            file = newPath;
+        }
+        
+        if (modifiedTime != null) {
+            FileTime time = FileTime.from(java.time.Instant.parse(modifiedTime));
+            Files.setLastModifiedTime(file, time);
+        }
+    }
+}
+
+class ConfigManager {
+    private static final Path CONFIG_FILE = Paths.get("encryptor.config");
+    private Properties config = new Properties();
+    
+    public ConfigManager() {
+        loadConfig();
+    }
+    
+    private void loadConfig() {
+        if (Files.exists(CONFIG_FILE)) {
+            try (InputStream in = Files.newInputStream(CONFIG_FILE)) {
+                config.load(in);
+            } catch (IOException e) {
+                System.err.println("⚠️  Could not load configuration");
+            }
+        }
+    }
+    
+    public void saveConfig() {
+        try (OutputStream out = Files.newOutputStream(CONFIG_FILE)) {
+            config.store(out, "Encryptor Configuration");
+        } catch (IOException e) {
+            System.err.println("⚠️  Could not save configuration");
+        }
+    }
+    
+    public String get(String key, String defaultValue) {
+        return config.getProperty(key, defaultValue);
+    }
+    
+    public void set(String key, String value) {
+        config.setProperty(key, value);
+    }
+}
+
+class ArchiveManager {
+    public static void createEncryptedArchive(List<Path> files, Path outputArchive, char[] password) throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (ZipOutputStream zos = new ZipOutputStream(baos)) {
+            for (Path file : files) {
+                if (!Files.exists(file)) continue;
+                
+                ZipEntry entry = new ZipEntry(file.getFileName().toString());
+                zos.putNextEntry(entry);
+                Files.copy(file, zos);
+                zos.closeEntry();
+            }
+        }
+        
+        byte[] archiveData = baos.toByteArray();
+        String base64Archive = Base64.getEncoder().encodeToString(archiveData);
+        
+        CryptoEngine crypto = new CryptoEngine();
+        String encrypted = crypto.encryptText(base64Archive, password);
+        
+        Files.write(outputArchive, encrypted.getBytes(StandardCharsets.UTF_8));
+    }
+    
+    public static void extractEncryptedArchive(Path archive, Path outputDir, char[] password) throws Exception {
+        CryptoEngine crypto = new CryptoEngine();
+        
+        String encrypted = new String(Files.readAllBytes(archive), StandardCharsets.UTF_8);
+        String decrypted = crypto.decryptText(encrypted, password);
+        byte[] archiveData = Base64.getDecoder().decode(decrypted);
+        
+        Files.createDirectories(outputDir);
+        
+        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(archiveData))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                Path outputFile = outputDir.resolve(entry.getName());
+                Files.copy(zis, outputFile, StandardCopyOption.REPLACE_EXISTING);
+                zis.closeEntry();
+            }
+        }
+    }
+}
+
+class FileComparer {
+    public static boolean compareFiles(Path file1, Path file2) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        
+        byte[] hash1 = md.digest(Files.readAllBytes(file1));
+        md.reset();
+        byte[] hash2 = md.digest(Files.readAllBytes(file2));
+        
+        return MessageDigest.isEqual(hash1, hash2);
+    }
+    
+    public static void displayComparison(Path file1, Path file2) throws Exception {
+        boolean identical = compareFiles(file1, file2);
+        
+        System.out.println("\n📊 File Comparison Results:");
+        System.out.println("════════════════════════════════════════");
+        System.out.println("File 1: " + file1.getFileName());
+        System.out.println("Size: " + Files.size(file1) + " bytes");
+        System.out.println("\nFile 2: " + file2.getFileName());
+        System.out.println("Size: " + Files.size(file2) + " bytes");
+        System.out.println("\nResult: " + (identical ? "✅ IDENTICAL" : "❌ DIFFERENT"));
+        System.out.println("════════════════════════════════════════");
+    }
+}
+
+class EncryptionProfile {
+    enum ProfileType { FAST, BALANCED, PARANOID }
+    
+    private ProfileType type;
+    private int iterationCount;
+    private boolean compression;
+    private int shredPasses;
+    
+    public EncryptionProfile(ProfileType type) {
+        this.type = type;
+        switch (type) {
+            case FAST -> {
+                iterationCount = 10000;
+                compression = false;
+                shredPasses = 1;
+            }
+            case BALANCED -> {
+                iterationCount = 65536;
+                compression = true;
+                shredPasses = 3;
+            }
+            case PARANOID -> {
+                iterationCount = 200000;
+                compression = true;
+                shredPasses = 7;
+            }
+        }
+    }
+    
+    public int getIterationCount() { return iterationCount; }
+    public boolean useCompression() { return compression; }
+    public int getShredPasses() { return shredPasses; }
+    public ProfileType getType() { return type; }
+    
+    public void displayInfo() {
+        System.out.println("\n🔐 Profile: " + type);
+        System.out.println("   Iterations: " + iterationCount);
+        System.out.println("   Compression: " + (compression ? "ON" : "OFF"));
+        System.out.println("   Shred passes: " + shredPasses);
+    }
+}
+
+class PasswordHistory {
+    private static final Path HISTORY_FILE = Paths.get(".password_history");
+    private static final int MAX_HISTORY = 50;
+    
+    public static void addPasswordTest(String passwordHash, boolean wasSuccessful) {
+        try {
+            List<String> history = new ArrayList<>();
+            if (Files.exists(HISTORY_FILE)) {
+                history = Files.readAllLines(HISTORY_FILE);
+            }
+            
+            String timestamp = java.time.LocalDateTime.now().toString();
+            String entry = timestamp + "," + passwordHash + "," + wasSuccessful;
+            history.add(entry);
+            
+            if (history.size() > MAX_HISTORY) {
+                history = history.subList(history.size() - MAX_HISTORY, history.size());
+            }
+            
+            Files.write(HISTORY_FILE, history);
+        } catch (IOException e) {
+            // Silent fail
+        }
+    }
+    
+    public static void displayHistory() throws IOException {
+        if (!Files.exists(HISTORY_FILE)) {
+            System.out.println("📜 No password history available");
+            return;
+        }
+        
+        List<String> history = Files.readAllLines(HISTORY_FILE);
+        System.out.println("\n📜 Recent Password Attempts (Last 10):");
+        System.out.println("════════════════════════════════════════");
+        
+        history.stream()
+            .skip(Math.max(0, history.size() - 10))
+            .forEach(entry -> {
+                String[] parts = entry.split(",");
+                String time = parts[0];
+                String result = parts[2].equals("true") ? "✅" : "❌";
+                System.out.println(result + " " + time);
+            });
+    }
+}
+
+class BackupManager {
+    private static final Path BACKUP_DIR = Paths.get(".encryptor_backups");
+    
+    public static void createBackup(Path file) throws IOException {
+        Files.createDirectories(BACKUP_DIR);
+        
+        String timestamp = java.time.LocalDateTime.now()
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        String backupName = file.getFileName() + "." + timestamp + ".backup";
+        Path backupPath = BACKUP_DIR.resolve(backupName);
+        
+        Files.copy(file, backupPath, StandardCopyOption.REPLACE_EXISTING);
+    }
+    
+    public static void listBackups() throws IOException {
+        if (!Files.exists(BACKUP_DIR)) {
+            System.out.println("📦 No backups found");
+            return;
+        }
+        
+        System.out.println("\n📦 Available Backups:");
+        System.out.println("════════════════════════════════════════");
+        
+        try (var stream = Files.list(BACKUP_DIR)) {
+            stream.forEach(backup -> {
+                try {
+                    long size = Files.size(backup);
+                    System.out.printf("• %s (%d bytes)%n", backup.getFileName(), size);
+                } catch (IOException e) {
+                    System.out.println("• " + backup.getFileName());
+                }
+            });
+        }
+    }
+    
+    public static void restoreBackup(String backupName, Path destination) throws IOException {
+        Path backupPath = BACKUP_DIR.resolve(backupName);
+        if (!Files.exists(backupPath)) {
+            throw new IOException("Backup not found");
+        }
+        
+        Files.copy(backupPath, destination, StandardCopyOption.REPLACE_EXISTING);
+    }
+}
+    public static void copyToClipboard(String text) {
+        try {
+            var toolkit = java.awt.Toolkit.getDefaultToolkit();
+            var clipboard = toolkit.getSystemClipboard();
+            var selection = new java.awt.datatransfer.StringSelection(text);
+            clipboard.setContents(selection, selection);
+            System.out.println("📋 Copied to clipboard!");
+        } catch (Exception e) {
+            System.err.println("⚠️  Clipboard not available");
+        }
+    }
+    
+    public static String getFromClipboard() {
+        try {
+            var toolkit = java.awt.Toolkit.getDefaultToolkit();
+            var clipboard = toolkit.getSystemClipboard();
+            var data = clipboard.getData(java.awt.datatransfer.DataFlavor.stringFlavor);
+            return data.toString();
+        } catch (Exception e) {
+            System.err.println("⚠️  Could not read from clipboard");
+            return null;
+        }
+    }
+}
+
+class ClipboardManager {
 public class EnhancedSecureEncryptor {
     private static final CryptoEngine crypto = new CryptoEngine();
     private static final Scanner scanner = new Scanner(System.in);
     private static final Console console = System.console();
+    private static final ConfigManager config = new ConfigManager();
 
     public static void main(String[] args) {
         boolean running = true;
 
-        System.out.println("🔐 Enhanced Secure Encryptor v2.0");
+        System.out.println("🔐 Enhanced Secure Encryptor v3.0");
         System.out.println("═══════════════════════════════════════════");
 
         while (running) {
@@ -300,14 +670,27 @@ public class EnhancedSecureEncryptor {
                     case "6" -> encryptDirectoryMode();
                     case "7" -> generatePasswordMode();
                     case "8" -> passwordStrengthCheck();
-                    case "9" -> {
+                    case "9" -> createKeyFileMode();
+                    case "10" -> encryptWithKeyFileMode();
+                    case "11" -> secureDeleteMode();
+                    case "12" -> clipboardEncryptMode();
+                    case "13" -> viewAuditLog();
+                    case "14" -> settingsMode();
+                    case "15" -> fileIntegrityCheck();
+                    case "16" -> createArchiveMode();
+                    case "17" -> extractArchiveMode();
+                    case "18" -> compareFilesMode();
+                    case "19" -> encryptionProfileMode();
+                    case "20" -> backupManagerMode();
+                    case "21" -> {
                         running = false;
                         System.out.println("🔒 Exiting securely. Goodbye!");
                     }
-                    default -> System.out.println("❌ Invalid choice. Please select 1-9.");
+                    default -> System.out.println("❌ Invalid choice. Please select 1-21.");
                 }
             } catch (Exception e) {
                 System.err.println("❌ Error: " + e.getMessage());
+                AuditLogger.log("ERROR", e.getMessage());
             }
         }
         scanner.close();
@@ -317,15 +700,17 @@ public class EnhancedSecureEncryptor {
         System.out.println("\n╔════════════════════════════════════════════╗");
         System.out.println("║     Secure Encryptor (AES-256-GCM)        ║");
         System.out.println("╚════════════════════════════════════════════╝");
-        System.out.println("1. 📝 Encrypt Text");
-        System.out.println("2. 🔓 Decrypt Text");
-        System.out.println("3. 📁 Encrypt File (with compression)");
-        System.out.println("4. 📂 Decrypt File");
-        System.out.println("5. 📦 Batch Encrypt Files");
-        System.out.println("6. 📚 Encrypt Directory");
-        System.out.println("7. 🎲 Generate Strong Password");
-        System.out.println("8. 🔑 Check Password Strength");
-        System.out.println("9. 🚪 Exit");
+        System.out.println("ENCRYPTION/DECRYPTION:");
+        System.out.println("1. 📝 Encrypt Text          2. 🔓 Decrypt Text");
+        System.out.println("3. 📁 Encrypt File          4. 📂 Decrypt File");
+        System.out.println("5. 📦 Batch Encrypt         6. 📚 Encrypt Directory");
+        System.out.println("\nADVANCED FEATURES:");
+        System.out.println("7. 🎲 Generate Password     8. 🔑 Check Strength");
+        System.out.println("9. 🔐 Create Key File      10. 🗝️  Encrypt w/Key File");
+        System.out.println("11. 🗑️  Secure Delete       12. 📋 Clipboard Encrypt");
+        System.out.println("\nUTILITIES:");
+        System.out.println("13. 📜 View Audit Log      14. ⚙️  Settings");
+        System.out.println("15. ✓ File Integrity       16. 🚪 Exit");
         System.out.print("\n➤ Enter your choice: ");
     }
 
@@ -364,11 +749,26 @@ public class EnhancedSecureEncryptor {
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         System.out.println(encrypted);
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        System.out.print("\nCopy to clipboard? (y/n): ");
+        if (scanner.nextLine().toLowerCase().startsWith("y")) {
+            ClipboardManager.copyToClipboard(encrypted);
+        }
+        
+        AuditLogger.log("TEXT_ENCRYPT", "Text encrypted successfully");
     }
 
     private static void decryptTextMode() throws CryptoException {
-        System.out.print("Enter encrypted message (Base64): ");
+        System.out.print("Enter encrypted message (or 'c' for clipboard): ");
         String encryptedText = scanner.nextLine();
+        
+        if (encryptedText.equalsIgnoreCase("c")) {
+            encryptedText = ClipboardManager.getFromClipboard();
+            if (encryptedText == null) {
+                System.out.println("❌ No data in clipboard");
+                return;
+            }
+        }
         
         char[] password = readPassword("Enter password: ");
         
@@ -377,6 +777,8 @@ public class EnhancedSecureEncryptor {
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         System.out.println(decrypted);
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        AuditLogger.log("TEXT_DECRYPT", "Text decrypted successfully");
     }
 
     private static void encryptFileMode() throws CryptoException {
@@ -399,6 +801,20 @@ public class EnhancedSecureEncryptor {
             percentage -> System.out.print("\r[" + "█".repeat(percentage/5) + " ".repeat(20-percentage/5) + "] " + percentage + "%"));
         
         System.out.println("\n✅ File encrypted successfully: " + outputPath);
+        
+        System.out.print("Save metadata? (y/n): ");
+        if (scanner.nextLine().toLowerCase().startsWith("y")) {
+            MetadataManager.saveMetadata(Paths.get(inputPath), Paths.get(outputPath + ".meta"));
+            System.out.println("📝 Metadata saved");
+        }
+        
+        System.out.print("Securely delete original? (y/n): ");
+        if (scanner.nextLine().toLowerCase().startsWith("y")) {
+            SecureShredder.shredFile(Paths.get(inputPath), 3);
+            System.out.println("🗑️  Original file securely deleted");
+        }
+        
+        AuditLogger.log("FILE_ENCRYPT", "File: " + inputPath);
     }
 
     private static void decryptFileMode() throws CryptoException {
@@ -411,6 +827,17 @@ public class EnhancedSecureEncryptor {
             outputPath = inputPath.replace(".enc", ".dec");
         }
         
+        boolean autoBackup = config.get("auto_backup", "false").equals("true");
+        if (autoBackup) {
+            try {
+                Files.copy(Paths.get(inputPath), Paths.get(inputPath + ".backup"), 
+                          StandardCopyOption.REPLACE_EXISTING);
+                System.out.println("💾 Auto-backup created");
+            } catch (IOException e) {
+                System.out.println("⚠️  Backup failed, continuing anyway");
+            }
+        }
+        
         System.out.print("Was compression enabled during encryption? (y/n): ");
         boolean decompress = scanner.nextLine().toLowerCase().startsWith("y");
         
@@ -421,6 +848,21 @@ public class EnhancedSecureEncryptor {
             percentage -> System.out.print("\r[" + "█".repeat(percentage/5) + " ".repeat(20-percentage/5) + "] " + percentage + "%"));
         
         System.out.println("\n✅ File decrypted successfully: " + outputPath);
+        
+        Path metaFile = Paths.get(inputPath + ".meta");
+        if (Files.exists(metaFile)) {
+            System.out.print("Restore metadata? (y/n): ");
+            if (scanner.nextLine().toLowerCase().startsWith("y")) {
+                try {
+                    MetadataManager.restoreMetadata(Paths.get(outputPath), metaFile);
+                    System.out.println("📝 Metadata restored");
+                } catch (IOException e) {
+                    System.out.println("⚠️  Could not restore metadata");
+                }
+            }
+        }
+        
+        AuditLogger.log("FILE_DECRYPT", "File: " + outputPath);
     }
 
     private static void batchEncryptMode() throws CryptoException {
@@ -490,5 +932,325 @@ public class EnhancedSecureEncryptor {
         System.out.println("   • Include numbers and symbols");
         System.out.println("   • Avoid common words or patterns");
         System.out.println("   • Use unique passwords for each account");
+    }
+    
+    private static void createKeyFileMode() throws IOException {
+        System.out.print("Enter key file path: ");
+        String keyPath = scanner.nextLine();
+        
+        System.out.print("Enter key size in bytes (32-256, default 64): ");
+        String sizeStr = scanner.nextLine();
+        int size = sizeStr.isEmpty() ? 64 : Integer.parseInt(sizeStr);
+        size = Math.max(32, Math.min(256, size));
+        
+        KeyFileManager.createKeyFile(Paths.get(keyPath), size);
+        System.out.println("✅ Key file created: " + keyPath);
+        System.out.println("⚠️  Keep this file secure - it's needed for decryption!");
+        
+        AuditLogger.log("KEY_FILE_CREATE", "Key file: " + keyPath);
+    }
+    
+    private static void encryptWithKeyFileMode() throws Exception {
+        System.out.print("Enter file to encrypt: ");
+        String inputPath = scanner.nextLine();
+        
+        System.out.print("Enter output file path: ");
+        String outputPath = scanner.nextLine();
+        if (outputPath.isEmpty()) {
+            outputPath = inputPath + ".enc";
+        }
+        
+        System.out.print("Enter password: ");
+        char[] password = readPassword("Enter password: ");
+        
+        System.out.print("Enter key file path: ");
+        String keyPath = scanner.nextLine();
+        
+        char[] combinedKey = KeyFileManager.combinePasswordAndKeyFile(password, Paths.get(keyPath));
+        
+        System.out.println("\n⏳ Encrypting with key file...");
+        crypto.encryptFile(Paths.get(inputPath), Paths.get(outputPath), combinedKey, true,
+            percentage -> System.out.print("\r[" + "█".repeat(percentage/5) + " ".repeat(20-percentage/5) + "] " + percentage + "%"));
+        
+        System.out.println("\n✅ File encrypted with key file!");
+        AuditLogger.log("KEYFILE_ENCRYPT", "File: " + inputPath);
+    }
+    
+    private static void secureDeleteMode() throws IOException {
+        System.out.print("Enter file path to securely delete: ");
+        String filePath = scanner.nextLine();
+        
+        System.out.print("Number of overwrite passes (1-7, default 3): ");
+        String passesStr = scanner.nextLine();
+        int passes = passesStr.isEmpty() ? 3 : Integer.parseInt(passesStr);
+        passes = Math.max(1, Math.min(7, passes));
+        
+        System.out.print("⚠️  This will permanently destroy the file. Continue? (yes/no): ");
+        if (!scanner.nextLine().equalsIgnoreCase("yes")) {
+            System.out.println("❌ Cancelled");
+            return;
+        }
+        
+        System.out.println("🗑️  Shredding file with " + passes + " passes...");
+        SecureShredder.shredFile(Paths.get(filePath), passes);
+        System.out.println("✅ File securely deleted");
+        
+        AuditLogger.log("SECURE_DELETE", "File: " + filePath + ", Passes: " + passes);
+    }
+    
+    private static void clipboardEncryptMode() throws CryptoException {
+        System.out.println("Select mode:");
+        System.out.println("1. Encrypt clipboard content");
+        System.out.println("2. Decrypt clipboard content");
+        System.out.print("Choice: ");
+        String choice = scanner.nextLine();
+        
+        String clipboardData = ClipboardManager.getFromClipboard();
+        if (clipboardData == null || clipboardData.isEmpty()) {
+            System.out.println("❌ Clipboard is empty");
+            return;
+        }
+        
+        char[] password = readPassword("Enter password: ");
+        
+        if (choice.equals("1")) {
+            String encrypted = crypto.encryptText(clipboardData, password);
+            ClipboardManager.copyToClipboard(encrypted);
+            System.out.println("✅ Clipboard encrypted and copied back!");
+            AuditLogger.log("CLIPBOARD_ENCRYPT", "Success");
+        } else if (choice.equals("2")) {
+            String decrypted = crypto.decryptText(clipboardData, password);
+            ClipboardManager.copyToClipboard(decrypted);
+            System.out.println("✅ Clipboard decrypted and copied back!");
+            AuditLogger.log("CLIPBOARD_DECRYPT", "Success");
+        }
+    }
+    
+    private static void viewAuditLog() throws IOException {
+        AuditLogger.viewLog();
+    }
+    
+    private static void settingsMode() {
+        System.out.println("\n⚙️  Settings & Configuration");
+        System.out.println("════════════════════════════════════════");
+        System.out.println("1. Set default output directory");
+        System.out.println("2. Set default compression (on/off)");
+        System.out.println("3. Set auto-backup before decrypt (on/off)");
+        System.out.println("4. View current settings");
+        System.out.println("5. Reset to defaults");
+        System.out.print("\nChoice: ");
+        
+        String choice = scanner.nextLine();
+        
+        switch (choice) {
+            case "1" -> {
+                System.out.print("Enter default output directory: ");
+                String dir = scanner.nextLine();
+                config.set("default_output_dir", dir);
+                config.saveConfig();
+                System.out.println("✅ Saved");
+            }
+            case "2" -> {
+                System.out.print("Enable compression by default? (y/n): ");
+                String compress = scanner.nextLine().toLowerCase().startsWith("y") ? "true" : "false";
+                config.set("default_compression", compress);
+                config.saveConfig();
+                System.out.println("✅ Saved");
+            }
+            case "3" -> {
+                System.out.print("Enable auto-backup? (y/n): ");
+                String backup = scanner.nextLine().toLowerCase().startsWith("y") ? "true" : "false";
+                config.set("auto_backup", backup);
+                config.saveConfig();
+                System.out.println("✅ Saved");
+            }
+            case "4" -> {
+                System.out.println("\nCurrent Settings:");
+                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                System.out.println("Default Output Dir: " + config.get("default_output_dir", "None"));
+                System.out.println("Default Compression: " + config.get("default_compression", "false"));
+                System.out.println("Auto-backup: " + config.get("auto_backup", "false"));
+            }
+            case "5" -> {
+                config.set("default_output_dir", "");
+                config.set("default_compression", "false");
+                config.set("auto_backup", "false");
+                config.saveConfig();
+                System.out.println("✅ Reset to defaults");
+            }
+        }
+    }
+    
+    private static void fileIntegrityCheck() throws Exception {
+        System.out.print("Enter file path: ");
+        String filePath = scanner.nextLine();
+        
+        if (!Files.exists(Paths.get(filePath))) {
+            System.out.println("❌ File not found");
+            return;
+        }
+        
+        byte[] fileData = Files.readAllBytes(Paths.get(filePath));
+        MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+        byte[] hash = sha256.digest(fileData);
+        String hashStr = Base64.getEncoder().encodeToString(hash);
+        
+        System.out.println("\n✅ File Integrity Information:");
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        System.out.println("File: " + filePath);
+        System.out.println("Size: " + fileData.length + " bytes");
+        System.out.println("SHA-256 Hash:");
+        System.out.println(hashStr);
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        System.out.print("\nSave hash to file? (y/n): ");
+        if (scanner.nextLine().toLowerCase().startsWith("y")) {
+            Files.write(Paths.get(filePath + ".sha256"), hashStr.getBytes());
+            System.out.println("✅ Hash saved");
+        }
+        
+        System.out.print("Copy hash to clipboard? (y/n): ");
+        if (scanner.nextLine().toLowerCase().startsWith("y")) {
+            ClipboardManager.copyToClipboard(hashStr);
+        }
+    }
+    
+    private static void createArchiveMode() throws Exception {
+        System.out.print("Enter file paths (comma-separated): ");
+        String[] filePaths = scanner.nextLine().split(",");
+        
+        List<Path> files = new ArrayList<>();
+        for (String path : filePaths) {
+            Path file = Paths.get(path.trim());
+            if (Files.exists(file)) {
+                files.add(file);
+            } else {
+                System.out.println("⚠️  File not found: " + path);
+            }
+        }
+        
+        if (files.isEmpty()) {
+            System.out.println("❌ No valid files to archive");
+            return;
+        }
+        
+        System.out.print("Enter output archive name: ");
+        String archiveName = scanner.nextLine();
+        if (!archiveName.endsWith(".enca")) {
+            archiveName += ".enca";
+        }
+        
+        char[] password = getPasswordWithConfirmation();
+        
+        System.out.println("⏳ Creating encrypted archive...");
+        ArchiveManager.createEncryptedArchive(files, Paths.get(archiveName), password);
+        
+        System.out.println("✅ Encrypted archive created: " + archiveName);
+        System.out.println("   Files archived: " + files.size());
+        
+        AuditLogger.log("ARCHIVE_CREATE", "Archive: " + archiveName + ", Files: " + files.size());
+    }
+    
+    private static void extractArchiveMode() throws Exception {
+        System.out.print("Enter archive path: ");
+        String archivePath = scanner.nextLine();
+        
+        System.out.print("Enter extraction directory: ");
+        String extractDir = scanner.nextLine();
+        
+        char[] password = readPassword("Enter password: ");
+        
+        System.out.println("⏳ Extracting encrypted archive...");
+        ArchiveManager.extractEncryptedArchive(Paths.get(archivePath), Paths.get(extractDir), password);
+        
+        System.out.println("✅ Archive extracted to: " + extractDir);
+        
+        AuditLogger.log("ARCHIVE_EXTRACT", "Archive: " + archivePath);
+    }
+    
+    private static void compareFilesMode() throws Exception {
+        System.out.print("Enter first file path: ");
+        String file1 = scanner.nextLine();
+        
+        System.out.print("Enter second file path: ");
+        String file2 = scanner.nextLine();
+        
+        FileComparer.displayComparison(Paths.get(file1), Paths.get(file2));
+    }
+    
+    private static void encryptionProfileMode() {
+        System.out.println("\n🎯 Encryption Security Profiles");
+        System.out.println("════════════════════════════════════════");
+        System.out.println("1. ⚡ FAST - Quick encryption for non-sensitive data");
+        System.out.println("2. ⚖️  BALANCED - Standard security (recommended)");
+        System.out.println("3. 🔒 PARANOID - Maximum security for critical data");
+        System.out.println("4. View current profile details");
+        System.out.print("\nChoice: ");
+        
+        String choice = scanner.nextLine();
+        
+        switch (choice) {
+            case "1" -> {
+                EncryptionProfile profile = new EncryptionProfile(EncryptionProfile.ProfileType.FAST);
+                profile.displayInfo();
+                config.set("encryption_profile", "FAST");
+                config.saveConfig();
+                System.out.println("✅ Profile set to FAST");
+            }
+            case "2" -> {
+                EncryptionProfile profile = new EncryptionProfile(EncryptionProfile.ProfileType.BALANCED);
+                profile.displayInfo();
+                config.set("encryption_profile", "BALANCED");
+                config.saveConfig();
+                System.out.println("✅ Profile set to BALANCED");
+            }
+            case "3" -> {
+                EncryptionProfile profile = new EncryptionProfile(EncryptionProfile.ProfileType.PARANOID);
+                profile.displayInfo();
+                config.set("encryption_profile", "PARANOID");
+                config.saveConfig();
+                System.out.println("✅ Profile set to PARANOID");
+            }
+            case "4" -> {
+                String currentProfile = config.get("encryption_profile", "BALANCED");
+                EncryptionProfile.ProfileType type = EncryptionProfile.ProfileType.valueOf(currentProfile);
+                EncryptionProfile profile = new EncryptionProfile(type);
+                profile.displayInfo();
+            }
+        }
+    }
+    
+    private static void backupManagerMode() throws IOException {
+        System.out.println("\n💾 Backup Manager");
+        System.out.println("════════════════════════════════════════");
+        System.out.println("1. List all backups");
+        System.out.println("2. Create manual backup");
+        System.out.println("3. Restore from backup");
+        System.out.println("4. View password history");
+        System.out.print("\nChoice: ");
+        
+        String choice = scanner.nextLine();
+        
+        switch (choice) {
+            case "1" -> BackupManager.listBackups();
+            case "2" -> {
+                System.out.print("Enter file path to backup: ");
+                String filePath = scanner.nextLine();
+                BackupManager.createBackup(Paths.get(filePath));
+                System.out.println("✅ Backup created");
+                AuditLogger.log("BACKUP_CREATE", "File: " + filePath);
+            }
+            case "3" -> {
+                BackupManager.listBackups();
+                System.out.print("\nEnter backup filename: ");
+                String backupName = scanner.nextLine();
+                System.out.print("Enter destination path: ");
+                String destPath = scanner.nextLine();
+                BackupManager.restoreBackup(backupName, Paths.get(destPath));
+                System.out.println("✅ Backup restored to: " + destPath);
+                AuditLogger.log("BACKUP_RESTORE", "Backup: " + backupName);
+            }
+            case "4" -> PasswordHistory.displayHistory();
+        }
     }
 }
