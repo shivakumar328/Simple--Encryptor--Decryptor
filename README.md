@@ -1,141 +1,255 @@
-# 🔐 Enhanced Secure Encryptor v3.0
+# Enhanced Secure Encryptor v3.0 🔐
 
-[](https://www.java.com)
-[](https://en.wikipedia.org/wiki/Galois/Counter_Mode)
-[](https://opensource.org/licenses/MIT)
-
-Ever wanted a single, powerful tool to lock down your files, text, and even your clipboard? Meet the **Enhanced Secure Encryptor**—a command-line Swiss Army knife for your personal security.
-
-This isn't just a simple encryptor. It's a full-featured security suite built in Java, using modern, authenticated **AES-256-GCM** encryption. It’s designed to be robust, user-friendly, and packed with utilities to cover all your encryption needs.
-
------
-
-## 🚀 Your Security Dashboard
-
-When you run the application, you're greeted with a comprehensive menu. This is your central hub for every security operation.
-
-```text
-🔐 Enhanced Secure Encryptor v3.0
-═══════════════════════════════════════════
-
-╔════════════════════════════════════════════╗
-║     Secure Encryptor (AES-256-GCM)       ║
-╚════════════════════════════════════════════╝
-
-ENCRYPTION/DECRYPTION:
-1.  📝 Encrypt Text           2.  🔓 Decrypt Text
-3.  📁 Encrypt File           4.  📂 Decrypt File
-5.  📦 Batch Encrypt          6.  📚 Encrypt Directory
-
-ADVANCED FEATURES:
-7.  🎲 Generate Password      8.  📊 Check Strength
-9.  🔐 Create Key File        10. 🗝️  Encrypt w/ Key File
-11. 🗑️  Secure Delete (Shred)  12. 📋 Clipboard Encrypt/Decrypt
-13. 🤐 Create Encrypted Archive 14. 📖 Extract Encrypted Archive
-
-UTILITIES & AUDIT:
-15. 🔐 Set Security Profile    16. 📦 Backup Manager
-17. 🔎 Compare Files (Hash)    18. ✓ File Integrity Check
-19. 📜 View Audit Log         20. ⚙️  Settings
-21. 🚪 Exit
-
-➤ Enter your choice:
+```
+  ███████╗███╗   ██╗ ██████╗██████╗ ██╗   ██╗██████╗ ████████╗ ██████╗ ██████╗ 
+  ██╔════╝████╗  ██║██╔════╝██╔══██╗╚██╗ ██╔╝██╔══██╗╚══██╔══╝██╔═══██╗██╔══██╗
+  █████╗  ██╔██╗ ██║██║     ██████╔╝ ╚████╔╝ ██████╔╝   ██║   ██║   ██║██████╔╝
+  ██╔══╝  ██║╚██╗██║██║     ██╔══██╗  ╚██╔╝  ██╔═══╝    ██║   ██║   ██║██╔══██╗
+  ███████╗██║ ╚████║╚██████╗██║  ██║   ██║   ██║        ██║   ╚██████╔╝██║  ██║
+  ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝   ╚═╝   ╚═╝        ╚═╝    ╚═════╝ ╚═╝  ╚═╝
 ```
 
------
+[![Java Version](https://img.shields.io/badge/Java-17%2B-orange)](https://www.oracle.com/java/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Security](https://img.shields.io/badge/Security-AES--256--GCM-green)](https://en.wikipedia.org/wiki/Galois/Counter_Mode)
+[![Status](https://img.shields.io/badge/Status-Active-success)](https://github.com/yourusername/enhanced-secure-encryptor)
 
-## ✨ Features at a Glance
+A robust Java-based encryption utility that provides secure file and text encryption using AES-256-GCM with advanced features for data protection and security management.
 
-This tool is more than just one thing. It's a...
+> 🔐 **Quick Start**: Jump to [Installation](#installation) to get started in less than 2 minutes!
 
-| Feature | Description |
-| :--- | :--- |
-| 📝 **Text Encryptor** | Quickly encrypt and decrypt snippets of text or messages. |
-| 📁 **File/Directory Encryptor** | Encrypt single files, batch-process multiple files, or encrypt entire directories recursively. |
-| 🤐 **Encrypted Archives** | Bundle multiple files into a single, encrypted `.enca` archive. |
-| 🔑 **Two-Factor Encryption** | Go beyond passwords. Generate a **Key File** to use alongside your password for two-factor protection. |
-| 🗑️ **Secure Shredder** | Securely delete original files by overwriting them with random data multiple times before deletion. |
-| 🎯 **Security Profiles** | Choose your security level: **Fast** (quick), **Balanced** (default), or **Paranoid** (max iterations). |
-| 🎲 **Password Toolkit** | Generate cryptographically secure passwords and check the strength of existing ones. |
-| 📋 **Clipboard Manager** | Encrypt text *from* your clipboard and copy the result back. Decrypt clipboard content just as easily. |
-| 🔎 **Integrity Checker** | Verify file integrity by generating and comparing **SHA-256** hashes. |
-| 📦 **Backup System** | Automatically or manually create backups of your encrypted files before performing operations. |
-| 📜 **Audit Logger** | Keeps a `crypto_audit.log` of all successful operations and errors for your review. |
-| ⚙️ **Config Manager** | Remembers your settings, like default compression or auto-backup preferences. |
+<details>
+<summary>🎯 Why Choose Enhanced Secure Encryptor?</summary>
 
------
+- Military-grade AES-256-GCM encryption
+- User-friendly interface with emoji indicators
+- Comprehensive security features
+- Active development and support
+- Regular security updates
+</details>
 
-## ⚙️ Under the Hood: The Core Tech
+## Features
 
-We don't roll our own crypto. This tool is built on trusted, industry-standard Java Cryptography:
+### Core Encryption Features
+- 🔒 AES-256-GCM encryption with PBKDF2 key derivation
+- 📝 Text encryption and decryption
+- 📁 File encryption with compression support
+- 📦 Directory and batch encryption
+- 🗄️ Encrypted archive creation and extraction
 
-  * **Encryption Algorithm:** **AES/GCM/NoPadding** (AES-256). GCM provides authenticated encryption (AEAD), which means it encrypts your data and simultaneously verifies its integrity. This protects against tampering.
-  * **Key Derivation:** **PBKDF2WithHmacSHA256**. Your password isn't used directly as the key. It's "stretched" using 65,536 iterations (or more\!) to make it resistant to brute-force attacks.
-  * **Secure Randomness:** `SecureRandom` is used to generate a unique cryptographic **salt** and **IV** (Initialization Vector) for *every single encryption*. This ensures that encrypting the same file twice with the same password produces two completely different outputs.
-  * **Compression:** Uses **GZIP** to compress files before encryption, saving space (especially on text-based files).
+### Security Features
 
------
+<details>
+<summary><b>🛡️ Core Security Features</b></summary>
 
-## 📖 How to Use
+| Feature | Description | Security Level |
+|---------|-------------|----------------|
+| 🔑 Key Files | Two-factor encryption support | Very High |
+| 🎲 Password Gen | Cryptographic random generation | High |
+| 💪 Strength Check | Real-time password analysis | Medium |
+| 🗑️ Secure Delete | DOD-compliant shredding | Very High |
+| ✓ Integrity | SHA-256 verification | High |
 
-### 1\. How to Compile & Run
+```
+Password Strength Indicators:
+🔴 Weak   : < 8 chars
+🟡 Medium : 8-11 chars + mixed
+🟢 Strong : 12-15 chars + mixed + symbols
+💚 V.Strong: 16+ chars + all types
+```
+</details>
 
-You'll need the Java JDK (version 17+ recommended) installed.
+### Advanced Features
+- 📋 Clipboard encryption
+- 📜 Audit logging
+- 💾 Automated backup management
+- 📊 File comparison tools
+- 🎯 Configurable security profiles
 
+## Requirements
+- Java 17 or higher
+- Terminal/Console with Unicode support
+
+## Installation
+1. Compile the Java source file:
 ```bash
-# 1. Compile all the .java files
-javac *.java
+javac EnhancedSecureEncryptor.java
+```
 
-# 2. Run the main application
+2. Run the program:
+```bash
 java EnhancedSecureEncryptor
 ```
 
-### 2\. Your First 60 Seconds: Encrypting a File 🚀
+## Usage 🚀
 
-Let's do a quick-start guide.
+<details open>
+<summary><b>📖 Interactive Guide</b></summary>
 
-1.  Run `java EnhancedSecureEncryptor`.
-2.  Select `3` (Encrypt File).
-3.  **Enter input file path:** `my_secrets.txt`
-4.  **Enter output file path:** (Press Enter to use the default: `my_secrets.txt.enc`)
-5.  **Enable compression? (y/n):** `y`
-6.  **Enter password:** `[your_super_strong_password]`
-7.  **Confirm password:** `[your_super_strong_password]`
-8.  The app will show you the strength (e.g., `💚 Password Strength: VERY_STRONG`) and then encrypt the file.
-9.  **Securely delete original? (y/n):** `y`
+### Quick Command Reference
+```bash
+# Start the encryptor
+java EnhancedSecureEncryptor
 
-**Done\!** Your original file is now securely shredded, and `my_secrets.txt.enc` is all that remains.
+# Compile with debug information
+javac -g EnhancedSecureEncryptor.java
 
-To get it back, just choose option `4` (Decrypt File) and use the same password.
+# Run with increased memory
+java -Xmx2g EnhancedSecureEncryptor
+```
 
------
+### Basic Operations
 
-## 🔒 A Deep Dive: Must-Know Features
+<details>
+<summary><b>1. 📝 Text Encryption</b></summary>
 
-### The "Paranoid" Profile (Option 15)
+```
+Main Menu > Option 1
+╔════════════════════════════════╗
+║ Enter text: Hello, World!      ║
+║ Password: ***********          ║
+╚════════════════════════════════╝
+✓ Text encrypted successfully!
+```
 
-By default, the app is in **Balanced** mode. But if you're protecting critical data, you can enable a profile:
+**Example Output:**
+```
+Encrypted: AES256[base64...]
+Strength: 🟢 STRONG
+Clipboard: Copied ✓
+```
+</details>
 
-  * **Fast:** Lower iterations, no compression. Quick for large files.
-  * **Balanced:** (Default) 65,536 iterations, compression on. Great for most uses.
-  * **Paranoid:** 200,000+ iterations, compression on, and defaults shredding to 7 passes. This will be slower, but it's *significantly* more resistant to offline brute-force attacks.
+2. **File Encryption**
+   - Select option 3 from the main menu
+   - Specify input and output file paths
+   - Choose whether to enable compression
+   - Enter encryption password
+   - Optionally save file metadata
 
-### Two-Factor Security: Key Files (Option 9 & 10)
+### Advanced Features
 
-This is one of the most powerful features. A password can be guessed. A password *and* a file you hold is much, much harder to break.
+1. **Key File Encryption**
+   - Create a key file using option 9
+   - Use option 10 to encrypt with both password and key file
+   - Store the key file securely
 
-**How it works:**
+2. **Batch Operations**
+   - Use option 5 for encrypting multiple files
+   - Use option 6 for encrypting entire directories
+   - Create encrypted archives with option 16
 
-1.  **First, create a key file:** Choose option `9`. It will generate a file (e.g., `my.key`) filled with secure random data. **Guard this file like a password\!**
-2.  **Then, encrypt:** Choose option `10`. The app will ask for your **password** *and* the **path to your key file**.
-3.  It combines your password and the key file's data to create the *real* encryption key.
-4.  To decrypt, you **must** provide the *same password* AND the *same key file*.
+3. **Security Profiles**
+   - Access profiles via option 19
+   - Choose between FAST, BALANCED, and PARANOID modes
+   - Each profile offers different security/performance tradeoffs
 
-> ⚠️ **A CRITICAL WARNING**
->
-> This tool is secure. That means it's also unforgiving.
->
-> **IF YOU FORGET YOUR PASSWORD, YOUR DATA IS GONE FOREVER.**
-> **IF YOU USE A KEY FILE AND YOU LOSE IT, YOUR DATA IS GONE FOREVER.**
->
-> There is no "forgot password" link. There is no backdoor. The encryption is absolute. Please, back up your passwords and key files in a secure location (like a password manager).
+## Security Considerations
+
+- 🔐 Use strong passwords (16+ characters)
+- 🔑 Keep key files separate from encrypted data
+- 📦 Enable compression for sensitive data
+- 💾 Regular backups are recommended
+- 📝 Monitor audit logs for security
+
+## Configuration ⚙️
+
+<details>
+<summary><b>Interactive Settings Guide</b></summary>
+
+```
+╔═══════════════════════════════════════╗
+║           Settings Menu                ║
+╠═══════════════════════════════════════╣
+║ 1. 📁 Output Directory: /encrypted     ║
+║ 2. 🗜️ Compression: ENABLED             ║
+║ 3. 💾 Auto-Backup: ON                  ║
+║ 4. 🛡️ Security Profile: BALANCED       ║
+╚═══════════════════════════════════════╝
+```
+
+### Quick Settings Guide
+
+| Setting | Command | Description |
+|---------|---------|-------------|
+| Output Dir | Option 14 > 1 | Set default save location |
+| Compression | Option 14 > 2 | Toggle file compression |
+| Auto-Backup | Option 14 > 3 | Enable automatic backups |
+| Security | Option 14 > 4 | Adjust security levels |
+
+</details>
+
+## Backup Management
+
+- Automatic backups before decryption (configurable)
+- Manual backup creation
+- Backup restoration
+- Password attempt history
+
+## File Integrity
+
+- SHA-256 hash verification
+- File comparison tools
+- Metadata preservation
+- Secure deletion with multiple passes
+
+## Contributing
+
+Feel free to submit issues and enhancement requests!
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Security Notice
+
+⚠️ This encryption tool uses strong cryptographic methods, but security depends on:
+- Password strength
+- Secure key file storage
+- Physical system security
+- Proper operational security practices
+
+## Support & Troubleshooting 🛟
+
+<details>
+<summary><b>Common Issues & Solutions</b></summary>
+
+### 1. Encryption Fails
+```
+Error: Unable to encrypt file
+┌─────────────────────────┐
+│ ✓ Check file permissions│
+│ ✓ Verify available space│
+│ ✓ Check file not in use │
+└─────────────────────────┘
+```
+
+### 2. Decryption Issues
+```
+Error: Invalid password
+┌─────────────────────────┐
+│ ✓ Verify password       │
+│ ✓ Check key file path   │
+│ ✓ Verify file integrity │
+└─────────────────────────┘
+```
+
+### Quick Diagnostic Commands
+```bash
+# Check Java version
+java -version
+
+# Verify file permissions
+dir EnhancedSecureEncryptor.java
+
+# View last audit log
+type crypto_audit.log
+```
+
+### Need More Help?
+- 📝 Check audit logs: `Option 13`
+- 🔍 Verify file integrity: `Option 15`
+- 🔐 Review security settings: `Option 14`
+- 💡 Generate debug info: `Option 14 > View current settings`
+
+</details>
